@@ -111,15 +111,57 @@
         scores-data (scoreboard-data date-map)
         _ (println scores-data)]
     (reduce (fn [acc m]
-              (let [header (f/header-frame (str (:quarter m) " - " (:quarter-time m)) curl?)
+              (let [header (f/header-frame m curl?)
                     matchup (f/matchup-frame m curl?)]
                 (str acc header matchup)))
             "" scores-data)))
 
+(defn qrt->int
+  [m]
+  (try (Integer/parseInt (first (str/split (:quarter m) #":"))) 
+       (catch Exception e
+         (try (Integer/parseInt (str (first (:quarter m))))
+              (catch Exception e
+                0)))))
+
+(defn today [] (let [jdate (new java.util.Date)]
+                 {:day (.getDate jdate)
+                  :month (inc (.getMonth jdate))
+                  :year 2017}))
+
+(def cached-scores (atom []))
+
+(future
+  (loop []
+    (reset! cached-scores (scoreboard-data (today)))
+    (Thread/sleep 20000)
+    (println "I'm invalidating and updating!")
+    @cached-scores
+    (recur)))
+
+(defn flat-scoreboards
+  [req]
+  (let [date-map (:params req)
+        ua (get-in req [:headers "user-agent"])
+        curl? (or (re-find #"curl" ua)
+                  (re-find #"wget" ua))
+        scores-data (sort #(< (qrt->int %1)
+                              (qrt->int %2))
+                          (if (empty? @cached-scores)
+                              (scoreboard-data date-map)
+                              @cached-scores))
+        date-head (f/date-frame date-map curl?)
+        flat-games (reduce (fn [acc m]
+                            (str acc (f/flat-game m curl?) "\n"))
+                          "" scores-data)]
+    (str date-head "\n" flat-games)))
 
 (defroutes app-routes
+  (GET "/api" req (str (scoreboard-data (:params req))))
   (GET "/games" req (make-scoreboards req))
+  (GET "/flat" req (flat-scoreboards req))
   (route/not-found "Not Found"))
 
 (def app
   (wrap-defaults app-routes site-defaults))
+
